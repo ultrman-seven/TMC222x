@@ -1,16 +1,37 @@
 #include "TMC222x.hpp"
 #include "wySys.hpp"
 
-void TMC222x::step(uint32_t s)
+void stepDelay(volatile uint32_t t)
 {
-    while (s--)
+    // volatile uint32_t dcnt;
+    while (t--)
     {
-        stepPin = 1;
+        // dcnt = 1;
+        // while (dcnt--)
+        //     ;
     }
 }
 
-// const int __speedStep = 0x5000;
-const int __speedStep = 0x500;
+void TMC222x::step(int32_t s)
+{
+    if (s < 0)
+    {
+        s = -s;
+        this->dir = 0;
+    }
+    else
+        this->dir = 1;
+    while (s--)
+    {
+        stepPin = 1;
+        stepDelay(2);
+        stepPin = 0;
+        stepDelay(2);
+    }
+}
+
+const int __speedStep = 0x5000;
+// const int __speedStep = 0x500;
 
 void TMC222x::run(bool isForward)
 {
@@ -21,11 +42,13 @@ void TMC222x::run(bool isForward)
 
     // spdStp = (dir > 0) ? (__speedStep) : (-__speedStep);
     // m->diagEnable = 0;
+    isAccelerating = true;
     __motorUartSendData(0x22, 0);
     sys::delayMs(2);
     *this = 1;
 
-    spdStp = __speedStep;
+    // spdStp = __speedStep;
+    spdStp = this->speedStep;
     if (isForward == 0)
         spdStp *= -1;
     if (speed < 0)
@@ -35,13 +58,20 @@ void TMC222x::run(bool isForward)
     }
     else
         uSpd = speed;
-    cnt = uSpd / __speedStep;
+    cnt = uSpd / this->speedStep;
     while (cnt--)
     {
         spd += spdStp;
         __motorUartSendData(0x22, spd);
         sys::delayMs(2);
     }
+    isAccelerating = false;
+}
+
+void TMC222x::stop()
+{
+    *this = 0;
+    __motorUartSendData(0x22, 0);
 }
 
 TMC222x::TMC222x(
@@ -56,6 +86,7 @@ TMC222x::TMC222x(
         dir.reInit(_dir);
     if (nullptr != _stp)
         limit.reInit(lim);
+    this->speedStep = __speedStep;
 }
 
 uint8_t _TMC_CRC8(uint8_t *datagram, uint8_t datagramLength)
@@ -108,45 +139,68 @@ inline void TMC222x::__motorUartSendData(uint8_t reg, uint32_t dat)
 
 #define TMC_REG_ADD_I_Hold_I_Run 0x10
 #define TMC_REG_ADD_T_Step 0x12
-#define TMC_REG_ADD_Speed
+#define TMC_REG_ADD_Speed 0x22
 #define TMC_REG_ADD_T_Cool_Thrs 0x14
 #define TMC_REG_ADD_SG_Thrs 0x40
+#define TMC_REG_ADD_G_Cfg 0x00
+#define TMC_REG_ADD_Chop_Cfg 0x6c
+#define TMC_REG_ADD_PWM_Cfg 0x70
 #define TMC_REG_ADD_
 // #define TMC_REG_InitData_I_Hold_I_Run
-// #define TMC_REG_InitData_
+#define TMC_REG_InitData_G_Cfg 0x1c1
 // #define TMC_REG_InitData_
 
 const uint32_t __TMC_InitData[] = {
-    0x1c0, ((0x7 << 16) | (18 << 8) | (15)), 0, 0, 0x10000053, 0xC10D0024, 0x23, 160};
-    // 0x1c0, ((0x7 << 16) | (18 << 8) | (15)), 0, 0, 0x10000053, 0xC10D0024, 0x253, 21};
-    // 0x1c0, ((0x7 << 16) | (18 << 8) | (15)), 0, 0, 0x10000053, 0xC10D0024, 0x5000, 110};
+    0x1c0,
+    ((0x7 << 16) | (18 << 8) | (15)),
+    0,
+    // 0x10010053,
+    0x10000053,
+    0xC10D0024};
+// ,
+// 0x23,
+// 160};
+
+// 0x1c0, ((0x7 << 16) | (18 << 8) | (15)), 0, 0, 0x10000053, 0xC10D0024, 0x253, 21};
+// 0x1c0, ((0x7 << 16) | (18 << 8) | (15)), 0, 0, 0x10000053, 0xC10D0024, 0x5000, 110};
 // 0x1c0, ((0x7 << 16) | (16 << 8) | (15)), 0, 0, 0x10000053, 0xC10D0024, 0x1E000, 255};
 // 0x1c0, ((0x7 << 16) | (16 << 8) | (15)), 0, 0, 0x10000053, 0xC10D0024, 0x1E000, 0x3000};
 // 0x1c0, ((0x7 << 16) | (16 << 8) | (15)), 0, 0, 0x10000053, 0xC10D0024, 0xe0000, 155};
 const uint8_t __TMC_InitReg[] = {
-    0x00, 0x10, 0x13, 0x14, 0x6C, 0x70, TMC_REG_ADD_T_Cool_Thrs, TMC_REG_ADD_SG_Thrs};
+    TMC_REG_ADD_G_Cfg,
+    TMC_REG_ADD_I_Hold_I_Run,
+    0x13,
+    TMC_REG_ADD_Chop_Cfg,
+    TMC_REG_ADD_PWM_Cfg};
+// ,
+//     TMC_REG_ADD_T_Cool_Thrs,
+//     TMC_REG_ADD_SG_Thrs};
+
+void TMC222x::setStalledPara(uint32_t Tcoolthrs, uint8_t Sgthrs)
+{
+    __motorUartSendData(TMC_REG_ADD_T_Cool_Thrs, Tcoolthrs);
+    sys::delayMs(10);
+    __motorUartSendData(TMC_REG_ADD_SG_Thrs, Sgthrs);
+    sys::delayMs(10);
+}
+
+void TMC222x::setRunningCurrent(uint8_t c)
+{
+    __motorUartSendData(TMC_REG_ADD_I_Hold_I_Run, ((0x7 << 16) | (c << 8) | (15)));
+    sys::delayMs(10);
+}
 
 void TMC222x::init()
 {
     uint8_t cnt = 0;
     *this = 0;
 
-    while (cnt < 8)
+    // while (cnt < 7)
+    while (cnt < 5)
     {
         __motorUartSendData(__TMC_InitReg[cnt], __TMC_InitData[cnt]);
         ++cnt;
-        sys::delayMs(100);
+        // sys::delayMs(100);
+        sys::delayMs(10);
     }
 }
-
-// #include "crc.hpp"
-
-// uint8_t _TMC_CRC8Check(uint8_t *dat, uint8_t len)
-// {
-//     uint8_t rlt = 0;
-
-//     while (len--)
-//         rlt = crcN_upTo8<8, 0x07>(*dat++, rlt);
-
-//     return rlt;
-// }
